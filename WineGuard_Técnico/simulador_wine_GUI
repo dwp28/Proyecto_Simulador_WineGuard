@@ -1,0 +1,647 @@
+"""
+Simulador de telemetría de vino tinto con sistema de alertas profesional.
+Incluye notificaciones visuales cuando ocurren incidentes.
+"""
+import json
+import time
+import random
+from datetime import datetime
+import paho.mqtt.client as mqtt
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+from threading import Thread
+
+# ============================================
+# CONFIGURACIÓN MQTT
+# ============================================
+BROKER = "test.mosquitto.org"
+PORT = 1883
+TOPIC = "greendelivery/trackers/telemetry"
+
+# ============================================
+# PARÁMETROS DE LOS INCIDENTES
+# ============================================
+EVENTOS_ANTES_INCIDENTE_1 = 15
+EVENTOS_INCIDENTE_TEMPERATURA = 6
+EVENTOS_ENTRE_INCIDENTES = 20
+EVENTOS_INCIDENTE_CHOQUE = 4
+EVENTOS_FINALES = 30
+
+EVENTO_PICO_EXTREMO_TEMP = 8
+EVENTOS_VIBRACION_ALTA = [12, 25]
+
+
+class AlertaPopup:
+    """Ventana emergente de alerta profesional"""
+    
+    def __init__(self, parent, tipo, datos):
+        self.ventana = tk.Toplevel(parent)
+        self.ventana.title("🚨 SISTEMA DE ALERTAS - WINEGUARD")
+        self.ventana.geometry("500x400")
+        self.ventana.resizable(False, False)
+        self.ventana.attributes('-topmost', True)  # Mantener al frente
+        
+        # Configurar según tipo de alerta
+        if tipo == "temperatura":
+            self.crear_alerta_temperatura(datos)
+        elif tipo == "choque":
+            self.crear_alerta_choque(datos)
+        
+        # Botón cerrar
+        btn_cerrar = tk.Button(
+            self.ventana, 
+            text="✓ Cerrar", 
+            command=self.ventana.destroy,
+            bg="#2ecc71", 
+            fg="white", 
+            font=("Arial", 12, "bold"),
+            cursor="hand2",
+            padx=20,
+            pady=10
+        )
+        btn_cerrar.pack(pady=20)
+    
+    def crear_alerta_temperatura(self, datos):
+        """Alerta de temperatura alta"""
+        # Header rojo
+        header = tk.Frame(self.ventana, bg="#e74c3c", height=80)
+        header.pack(fill="x")
+        
+        tk.Label(
+            header,
+            text="🌡️ ALERTA DE TEMPERATURA",
+            bg="#e74c3c",
+            fg="white",
+            font=("Arial", 18, "bold")
+        ).pack(pady=15)
+        
+        tk.Label(
+            header,
+            text=f"Paquete: {datos['id_paquete']}",
+            bg="#e74c3c",
+            fg="white",
+            font=("Arial", 12)
+        ).pack()
+        
+        # Contenido
+        contenido = tk.Frame(self.ventana, bg="white", padx=30, pady=20)
+        contenido.pack(fill="both", expand=True)
+        
+        tk.Label(
+            contenido,
+            text="⚠️ Temperatura crítica detectada",
+            bg="white",
+            fg="#e74c3c",
+            font=("Arial", 14, "bold")
+        ).pack(pady=10)
+        
+        info_frame = tk.Frame(contenido, bg="#fff3cd", padx=15, pady=15)
+        info_frame.pack(fill="x", pady=10)
+        
+        tk.Label(
+            info_frame,
+            text=f"Temperatura actual: {datos['temperatura']}°C",
+            bg="#fff3cd",
+            font=("Arial", 11, "bold")
+        ).pack()
+        
+        tk.Label(
+            info_frame,
+            text=f"Umbral máximo: 8.0°C",
+            bg="#fff3cd",
+            font=("Arial", 10)
+        ).pack()
+        
+        tk.Label(
+            info_frame,
+            text=f"⚠️ Exceso: +{datos['temperatura'] - 8.0:.1f}°C",
+            bg="#fff3cd",
+            fg="#d35400",
+            font=("Arial", 10, "bold")
+        ).pack(pady=5)
+        
+        # Acciones
+        accion_frame = tk.Frame(contenido, bg="#e8f5e9", padx=15, pady=15)
+        accion_frame.pack(fill="x", pady=10)
+        
+        tk.Label(
+            accion_frame,
+            text="📋 ACCIONES EN CURSO:",
+            bg="#e8f5e9",
+            font=("Arial", 11, "bold")
+        ).pack()
+        
+        acciones = [
+            "✓ Notificando al equipo de logística...",
+            "✓ Activando sistema de refrigeración de emergencia...",
+            "✓ Alertando al conductor para revisar temperatura...",
+            "✓ Registro enviado al sistema de calidad..."
+        ]
+        
+        for accion in acciones:
+            tk.Label(
+                accion_frame,
+                text=accion,
+                bg="#e8f5e9",
+                font=("Arial", 9),
+                anchor="w"
+            ).pack(anchor="w", pady=2)
+    
+    def crear_alerta_choque(self, datos):
+        """Alerta de choque/impacto"""
+        # Header naranja
+        header = tk.Frame(self.ventana, bg="#e67e22", height=80)
+        header.pack(fill="x")
+        
+        tk.Label(
+            header,
+            text="💥 ALERTA DE IMPACTO",
+            bg="#e67e22",
+            fg="white",
+            font=("Arial", 18, "bold")
+        ).pack(pady=15)
+        
+        tk.Label(
+            header,
+            text=f"Paquete: {datos['id_paquete']}",
+            bg="#e67e22",
+            fg="white",
+            font=("Arial", 12)
+        ).pack()
+        
+        # Contenido
+        contenido = tk.Frame(self.ventana, bg="white", padx=30, pady=20)
+        contenido.pack(fill="both", expand=True)
+        
+        tk.Label(
+            contenido,
+            text="⚠️ Impacto fuerte detectado",
+            bg="white",
+            fg="#e67e22",
+            font=("Arial", 14, "bold")
+        ).pack(pady=10)
+        
+        info_frame = tk.Frame(contenido, bg="#ffe5cc", padx=15, pady=15)
+        info_frame.pack(fill="x", pady=10)
+        
+        tk.Label(
+            info_frame,
+            text=f"Fuerza G: {datos['fuerza_g']}G | Inclinación: {datos['inclinacion']}°",
+            bg="#ffe5cc",
+            font=("Arial", 11, "bold")
+        ).pack()
+        
+        tk.Label(
+            info_frame,
+            text=f"Umbral fuerza: 2.5G | Umbral inclinación: 30°",
+            bg="#ffe5cc",
+            font=("Arial", 10)
+        ).pack(pady=5)
+        
+        # Acciones
+        accion_frame = tk.Frame(contenido, bg="#fff3cd", padx=15, pady=15)
+        accion_frame.pack(fill="x", pady=10)
+        
+        tk.Label(
+            accion_frame,
+            text="📋 PROTOCOLO DE EMERGENCIA ACTIVADO:",
+            bg="#fff3cd",
+            font=("Arial", 11, "bold")
+        ).pack()
+        
+        acciones = [
+            "✓ Contactando con el conductor inmediatamente...",
+            "✓ Verificando estado del paquete...",
+            "✓ Enviando email al cliente:",
+            "   'Estimado cliente, informamos que su pedido",
+            "   ha tenido un inconveniente. Disculpe las molestias.",
+            "   Le informaremos pronto sobre el estado.'",
+            "✓ Activando seguro de transporte...",
+            "✓ Preparando paquete de reemplazo..."
+        ]
+        
+        for accion in acciones:
+            tk.Label(
+                accion_frame,
+                text=accion,
+                bg="#fff3cd",
+                font=("Arial", 9),
+                anchor="w"
+            ).pack(anchor="w", pady=1)
+
+
+class SimuladorGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🍷 GreenDelivery - Sistema de Monitorización de Vino")
+        self.root.geometry("800x700")
+        self.root.resizable(False, False)
+        self.root.configure(bg="#f8f9fa")
+        
+        # Variables
+        self.simulando = False
+        self.evento_actual = 0
+        self.id_pedido = None
+        self.client = None
+        self.alerta_temp_mostrada = False
+        self.alerta_choque_mostrada = False
+        
+        # Configurar interfaz
+        self.crear_interfaz()
+    
+    def crear_interfaz(self):
+        """Crea la interfaz gráfica profesional"""
+        # Header profesional
+        header = tk.Frame(self.root, bg="#2c3e50", height=100)
+        header.pack(fill="x")
+        
+        tk.Label(
+            header,
+            text="🍷 WINEGUARD",
+            bg="#2c3e50",
+            fg="white",
+            font=("Arial", 24, "bold")
+        ).pack(pady=10)
+        
+        tk.Label(
+            header,
+            text="Sistema de Monitorización en Tiempo Real",
+            bg="#2c3e50",
+            fg="#ecf0f1",
+            font=("Arial", 12)
+        ).pack()
+        
+        # Frame principal
+        main_frame = tk.Frame(self.root, bg="#f8f9fa", padx=20, pady=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Frame de input
+        input_frame = tk.LabelFrame(
+            main_frame,
+            text="  📦 Iniciar Nuevo Trackeo  ",
+            bg="white",
+            font=("Arial", 12, "bold"),
+            padx=20,
+            pady=15
+        )
+        input_frame.pack(fill="x", pady=10)
+        
+        tk.Label(
+            input_frame,
+            text="ID del Pedido:",
+            bg="white",
+            font=("Arial", 11)
+        ).grid(row=0, column=0, sticky="w", pady=10)
+        
+        self.entry_pedido = tk.Entry(
+            input_frame,
+            font=("Arial", 11),
+            width=25,
+            relief="solid",
+            borderwidth=1
+        )
+        self.entry_pedido.grid(row=0, column=1, padx=10, pady=10)
+        self.entry_pedido.insert(0, "PED-2024-001")
+        
+        self.btn_iniciar = tk.Button(
+            input_frame,
+            text="🚀 Iniciar Trackeo",
+            command=self.iniciar_simulacion,
+            bg="#27ae60",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            padx=15,
+            pady=8,
+            cursor="hand2",
+            relief="flat"
+        )
+        self.btn_iniciar.grid(row=0, column=2, padx=5)
+        
+        self.btn_detener = tk.Button(
+            input_frame,
+            text="🛑 Detener",
+            command=self.detener_simulacion,
+            bg="#e74c3c",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            padx=15,
+            pady=8,
+            cursor="hand2",
+            relief="flat",
+            state="disabled"
+        )
+        self.btn_detener.grid(row=0, column=3, padx=5)
+        
+        # Frame de estado
+        estado_frame = tk.LabelFrame(
+            main_frame,
+            text="  📊 Estado del Sistema  ",
+            bg="white",
+            font=("Arial", 12, "bold"),
+            padx=20,
+            pady=15
+        )
+        estado_frame.pack(fill="x", pady=10)
+        
+        self.label_estado = tk.Label(
+            estado_frame,
+            text="⚪ Sistema en espera",
+            bg="white",
+            font=("Arial", 13, "bold"),
+            fg="#95a5a6"
+        )
+        self.label_estado.pack(pady=5)
+        
+        self.label_evento = tk.Label(
+            estado_frame,
+            text="Eventos enviados: 0",
+            bg="white",
+            font=("Arial", 11)
+        )
+        self.label_evento.pack(pady=5)
+        
+        # Progress bar moderna
+        self.progress = ttk.Progressbar(
+            estado_frame,
+            mode='indeterminate',
+            length=600
+        )
+        self.progress.pack(pady=10)
+        
+        # Indicadores de paquetes
+        paquetes_frame = tk.Frame(estado_frame, bg="white")
+        paquetes_frame.pack(fill="x", pady=10)
+        
+        self.indicadores = {}
+        for i, nombre in enumerate(["Paquete 001", "Paquete 002", "Paquete 003"]):
+            frame = tk.Frame(paquetes_frame, bg="#ecf0f1", relief="solid", borderwidth=1)
+            frame.grid(row=0, column=i, padx=10)
+            
+            tk.Label(
+                frame,
+                text=nombre,
+                bg="#ecf0f1",
+                font=("Arial", 9, "bold")
+            ).pack(pady=5, padx=15)
+            
+            status = tk.Label(
+                frame,
+                text="●",
+                bg="#ecf0f1",
+                fg="#95a5a6",
+                font=("Arial", 20)
+            )
+            status.pack(pady=5)
+            
+            self.indicadores[f"vino_tinto_00{i+1}"] = status
+        
+        # Frame de log
+        log_frame = tk.LabelFrame(
+            main_frame,
+            text="  📝 Registro de Eventos  ",
+            bg="white",
+            font=("Arial", 12, "bold"),
+            padx=15,
+            pady=10
+        )
+        log_frame.pack(fill="both", expand=True, pady=10)
+        
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame,
+            height=12,
+            font=("Consolas", 9),
+            bg="#2c3e50",
+            fg="#ecf0f1",
+            insertbackground="white",
+            relief="flat"
+        )
+        self.log_text.pack(fill="both", expand=True)
+        
+        # Footer
+        footer = tk.Frame(self.root, bg="#34495e", height=40)
+        footer.pack(fill="x")
+        
+        tk.Label(
+            footer,
+            text="GreenDelivery Tracking System v2.0 | MQTT: test.mosquitto.org | © 2024",
+            bg="#34495e",
+            fg="white",
+            font=("Arial", 9)
+        ).pack(pady=10)
+    
+    def actualizar_indicador(self, id_paquete, color):
+        """Actualiza el color del indicador de un paquete"""
+        if id_paquete in self.indicadores:
+            self.indicadores[id_paquete].config(fg=color)
+    
+    def log(self, mensaje):
+        """Añade mensaje al log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_text.insert(tk.END, f"[{timestamp}] {mensaje}\n")
+        self.log_text.see(tk.END)
+    
+    def iniciar_simulacion(self):
+        """Inicia la simulación"""
+        self.id_pedido = self.entry_pedido.get()
+        
+        if not self.id_pedido:
+            self.log("❌ ERROR: Debe introducir un ID de pedido")
+            return
+        
+        self.simulando = True
+        self.evento_actual = 0
+        self.alerta_temp_mostrada = False
+        self.alerta_choque_mostrada = False
+        
+        self.btn_iniciar.config(state="disabled")
+        self.btn_detener.config(state="normal")
+        self.entry_pedido.config(state="disabled")
+        self.progress.start(10)
+        
+        self.label_estado.config(
+            text=f"🟢 Trackeo activo - {self.id_pedido}",
+            fg="#27ae60"
+        )
+        self.log(f"🚀 Trackeo iniciado para pedido: {self.id_pedido}")
+        self.log(f"📡 Conectando a broker MQTT...")
+        
+        # Conectar MQTT
+        try:
+            self.client = mqtt.Client()
+            self.client.connect(BROKER, PORT, 60)
+            self.log(f"✅ Conectado a {BROKER}")
+        except Exception as e:
+            self.log(f"❌ ERROR: {str(e)}")
+            self.detener_simulacion()
+            return
+        
+        # Iniciar simulación
+        thread = Thread(target=self.simular_datos, daemon=True)
+        thread.start()
+    
+    def detener_simulacion(self):
+        """Detiene la simulación"""
+        self.simulando = False
+        self.btn_iniciar.config(state="normal")
+        self.btn_detener.config(state="disabled")
+        self.entry_pedido.config(state="normal")
+        self.progress.stop()
+        self.label_estado.config(
+            text="🔴 Trackeo detenido",
+            fg="#e74c3c"
+        )
+        self.log("🛑 Simulación detenida")
+        
+        # Resetear indicadores
+        for indicador in self.indicadores.values():
+            indicador.config(fg="#95a5a6")
+        
+        if self.client:
+            self.client.disconnect()
+    
+    def generar_datos_normales(self, id_paquete):
+        return {
+            "id_paquete": id_paquete,
+            "temperatura": round(random.uniform(4.0, 7.5), 2),
+            "fuerza_g": round(random.uniform(0.1, 1.8), 2),
+            "inclinacion": round(random.uniform(0.0, 15.0), 2),
+            "humedad": round(random.uniform(50.0, 70.0), 2),
+            "oxigeno": round(random.uniform(19.0, 21.0), 2),
+            "vapores": round(random.uniform(0.0, 5.0), 2),
+            "iluminacion": round(random.uniform(0.0, 50.0), 2),
+            "vibracion": round(random.uniform(0.0, 2.0), 2),
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+    
+    def generar_incidente_temperatura(self, id_paquete):
+        data = self.generar_datos_normales(id_paquete)
+        data["temperatura"] = round(random.uniform(9.0, 12.0), 2)
+        return data
+    
+    def generar_incidente_choque(self, id_paquete):
+        data = self.generar_datos_normales(id_paquete)
+        data["fuerza_g"] = round(random.uniform(3.5, 5.0), 2)
+        data["inclinacion"] = round(random.uniform(45.0, 90.0), 2)
+        return data
+    
+    def generar_paquete_caido(self, id_paquete):
+        data = self.generar_datos_normales(id_paquete)
+        data["fuerza_g"] = 0.0
+        data["inclinacion"] = 0.0
+        data["vibracion"] = 0.0
+        return data
+    
+    def generar_pico_temperatura_extremo(self, id_paquete):
+        data = self.generar_datos_normales(id_paquete)
+        data["temperatura"] = round(random.uniform(25.0, 30.0), 2)
+        return data
+    
+    def generar_vibracion_alta(self, id_paquete):
+        data = self.generar_datos_normales(id_paquete)
+        data["vibracion"] = round(random.uniform(5.0, 8.0), 2)
+        return data
+    
+    def simular_datos(self):
+        """Loop principal de simulación"""
+        while self.simulando:
+            self.evento_actual += 1
+            
+            # Determinar fase y generar datos
+            if self.evento_actual <= EVENTOS_ANTES_INCIDENTE_1:
+                fase = "NORMAL"
+                paquetes = [
+                    self.generar_datos_normales("vino_tinto_001"),
+                    self.generar_datos_normales("vino_tinto_002"),
+                    self.generar_datos_normales("vino_tinto_003")
+                ]
+            
+            elif self.evento_actual <= EVENTOS_ANTES_INCIDENTE_1 + EVENTOS_INCIDENTE_TEMPERATURA:
+                fase = "🔥 INCIDENTE TEMPERATURA"
+                paquetes = [
+                    self.generar_incidente_temperatura("vino_tinto_001"),
+                    self.generar_datos_normales("vino_tinto_002"),
+                    self.generar_datos_normales("vino_tinto_003")
+                ]
+                
+                # Mostrar alerta solo una vez
+                if not self.alerta_temp_mostrada:
+                    self.root.after(0, lambda: AlertaPopup(self.root, "temperatura", paquetes[0]))
+                    self.alerta_temp_mostrada = True
+                    self.actualizar_indicador("vino_tinto_001", "#e74c3c")
+            
+            elif self.evento_actual <= EVENTOS_ANTES_INCIDENTE_1 + EVENTOS_INCIDENTE_TEMPERATURA + EVENTOS_ENTRE_INCIDENTES:
+                fase = "RECUPERACIÓN"
+                paquetes = [
+                    self.generar_datos_normales("vino_tinto_001"),
+                    self.generar_datos_normales("vino_tinto_002"),
+                    self.generar_datos_normales("vino_tinto_003")
+                ]
+                self.actualizar_indicador("vino_tinto_001", "#27ae60")
+            
+            elif self.evento_actual <= EVENTOS_ANTES_INCIDENTE_1 + EVENTOS_INCIDENTE_TEMPERATURA + EVENTOS_ENTRE_INCIDENTES + EVENTOS_INCIDENTE_CHOQUE:
+                fase = "💥 INCIDENTE CHOQUE"
+                paquetes = [
+                    self.generar_datos_normales("vino_tinto_001"),
+                    self.generar_incidente_choque("vino_tinto_002"),
+                    self.generar_datos_normales("vino_tinto_003")
+                ]
+                
+                # Mostrar alerta solo una vez
+                if not self.alerta_choque_mostrada:
+                    self.root.after(0, lambda: AlertaPopup(self.root, "choque", paquetes[1]))
+                    self.alerta_choque_mostrada = True
+                    self.actualizar_indicador("vino_tinto_002", "#e67e22")
+            
+            else:
+                fase = "FINAL"
+                paquetes = [
+                    self.generar_datos_normales("vino_tinto_001"),
+                    self.generar_paquete_caido("vino_tinto_002"),
+                    self.generar_datos_normales("vino_tinto_003")
+                ]
+                self.actualizar_indicador("vino_tinto_002", "#95a5a6")
+            
+            # Eventos especiales
+            if self.evento_actual == EVENTO_PICO_EXTREMO_TEMP:
+                paquetes[2] = self.generar_pico_temperatura_extremo("vino_tinto_003")
+                self.log(f"🔵 Pico extremo temperatura: {paquetes[2]['temperatura']}°C (paquete 003)")
+                self.actualizar_indicador("vino_tinto_003", "#3498db")
+            
+            if self.evento_actual in EVENTOS_VIBRACION_ALTA:
+                paquetes[2] = self.generar_vibracion_alta("vino_tinto_003")
+                self.log(f"🟡 Vibración alta: {paquetes[2]['vibracion']}Hz (paquete 003)")
+                self.actualizar_indicador("vino_tinto_003", "#f39c12")
+            
+            # Publicar
+            self.log(f"📦 Evento {self.evento_actual} - {fase}")
+            for data in paquetes:
+                payload = json.dumps(data)
+                self.client.publish(TOPIC, payload)
+            
+            self.label_evento.config(text=f"Eventos enviados: {self.evento_actual}")
+            
+            # Reiniciar
+            if self.evento_actual >= EVENTOS_ANTES_INCIDENTE_1 + EVENTOS_INCIDENTE_TEMPERATURA + EVENTOS_ENTRE_INCIDENTES + EVENTOS_INCIDENTE_CHOQUE + EVENTOS_FINALES:
+                self.log("🏁 Ciclo completo. Reiniciando...")
+                self.evento_actual = 0
+                self.alerta_temp_mostrada = False
+                self.alerta_choque_mostrada = False
+                for indicador in self.indicadores.values():
+                    indicador.config(fg="#95a5a6")
+                time.sleep(5)
+                continue
+            
+            time.sleep(2)
+        
+        if self.client:
+            self.client.disconnect()
+
+
+def main():
+    root = tk.Tk()
+    app = SimuladorGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

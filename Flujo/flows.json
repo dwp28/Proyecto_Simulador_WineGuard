@@ -1,0 +1,243 @@
+[
+    {
+        "id": "f6f2187d.f17ca8",
+        "type": "tab",
+        "label": "Wine_Flow",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "319f878d9af1e34a",
+        "type": "mqtt in",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "topic": "greendelivery/trackers/telemetry",
+        "qos": "1",
+        "datatype": "auto-detect",
+        "broker": "3e8ff8d4d8241cd2",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 160,
+        "wires": [
+            [
+                "933b19b87aa54682"
+            ]
+        ]
+    },
+    {
+        "id": "933b19b87aa54682",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Validar JSON",
+        "func": "// ==============================================\n// VALIDACIÓN SIMPLE (Node-RED)\n// ==============================================\n// La lógica de detección ahora está en la API\n// Este nodo solo valida formato y tipos\n\n// Validar y normalizar payload\nlet data;\ntry {\n    if (typeof msg.payload === \"string\") {\n        data = JSON.parse(msg.payload);\n    } else {\n        data = msg.payload;\n    }\n} catch (e) {\n    node.warn(\"❌ JSON inválido: \" + e.message);\n    return null;\n}\n\n// Validar que existen todos los campos requeridos\nconst requiredFields = [\n    \"id_paquete\", \"timestamp\", \"temperatura\", \"fuerza_g\", \n    \"inclinacion\", \"humedad\", \"oxigeno\", \"vapores\", \n    \"iluminacion\", \"vibracion\"\n];\n\nfor (const field of requiredFields) {\n    if (!(field in data)) {\n        node.warn(`❌ Falta el campo: ${field}`);\n        return null;\n    }\n}\n\n// Validar tipos básicos\nif (typeof data.id_paquete !== \"string\" || typeof data.timestamp !== \"string\") {\n    node.warn(\"❌ id_paquete y timestamp deben ser strings\");\n    return null;\n}\n\n// Validar que los valores numéricos sean números\nconst numericFields = [\n    \"temperatura\", \"fuerza_g\", \"inclinacion\", \"humedad\", \n    \"oxigeno\", \"vapores\", \"iluminacion\", \"vibracion\"\n];\n\nfor (const field of numericFields) {\n    if (typeof data[field] !== \"number\") {\n        node.warn(`❌ ${field} debe ser un número`);\n        return null;\n    }\n}\n\n// Todo bien, enviar a la API\nmsg.payload = data;\nmsg.headers = {\n    \"Content-Type\": \"application/json\"\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 80,
+        "wires": [
+            [
+                "3872e7687f4cb938",
+                "dfe63275af40f133"
+            ]
+        ]
+    },
+    {
+        "id": "4a8936e9a5688663",
+        "type": "http request",
+        "z": "f6f2187d.f17ca8",
+        "name": "Enviar a API de Ingesta",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://host.docker.internal:8000/ingest",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 830,
+        "y": 340,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "269e7d167f7c5d7d",
+        "type": "delay",
+        "z": "f6f2187d.f17ca8",
+        "name": "Esperar antes de reintentar",
+        "pauseType": "delay",
+        "timeout": "12",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "second",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": false,
+        "allowrate": false,
+        "outputs": 1,
+        "x": 280,
+        "y": 480,
+        "wires": [
+            [
+                "3872e7687f4cb938"
+            ]
+        ]
+    },
+    {
+        "id": "3872e7687f4cb938",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Contador de reintentos",
+        "func": "// Si no hay contador de reintentos, inicialízalo\nif (!msg.retryCount) {\n    msg.retryCount = 0;\n}\n\n// Incrementa el contador\nmsg.retryCount++;\n\n// Si ha superado 12 reintentos, detén el mensaje\nif (msg.retryCount > 12) {\n    node.warn(\"⚠️ Máximo de reintentos alcanzado. Descartando mensaje.\");\n    return null; // Descarta el mensaje\n}\n\n// Devuelve el mensaje para reintentar\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 540,
+        "y": 280,
+        "wires": [
+            [
+                "4a8936e9a5688663"
+            ]
+        ]
+    },
+    {
+        "id": "fd75a1e861dd7312",
+        "type": "catch",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "scope": null,
+        "uncaught": false,
+        "x": 120,
+        "y": 340,
+        "wires": [
+            [
+                "269e7d167f7c5d7d"
+            ]
+        ]
+    },
+    {
+        "id": "dfe63275af40f133",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Detección incidente",
+        "func": "// Estado persistente: cuenta anomalías consecutivas por paquete\nconst state = flow.get(\"alertState\") || {};\n\nconst pkg = msg.payload.id_paquete;\nconst temp = msg.payload.temperatura;\nconst g = msg.payload.fuerza_g;\nconst incl = msg.payload.inclinacion;\n\n// ¿Este evento es anómalo? (temperatura > 8 OR fuerza_g > 2.5 OR inclinacion > 15)\nconst isAnomalous = (temp > 8.0) || (g > 2.5) || (incl > 15.0);\n\n// Inicializar estado del paquete si no existe\nif (!state[pkg]) {\n    state[pkg] = { count: 0, alerted: false };\n}\n\n// Lógica de conteo\nif (isAnomalous) {\n    state[pkg].count++;\n\n    // Si llegamos a 5 y aún no se ha alertado, generamos alerta\n    if (state[pkg].count >= 5 && !state[pkg].alerted) {\n        state[pkg].alerted = true; // marca que ya se alertó (evita duplicados)\n\n        msg.alert = {\n            id_paquete: pkg,\n            timestamp: msg.payload.timestamp,      // momento del 5º evento\n            detected_at: new Date().toISOString(),\n            reason: (temp > 8.0) ? \"temperatura\" :\n                (g > 2.5) ? \"impacto\" : \"inclinacion\",\n            temperatura: temp,\n            fuerza_g: g,\n            inclinacion: incl\n        };\n        flow.set(\"alertState\", state);\n        return msg; // enviar alerta\n    }\n} else {\n    // Reset si el evento es normal\n    state[pkg] = { count: 0, alerted: false };\n}\n\nflow.set(\"alertState\", state);\nreturn null; // no enviar nada si no hay alerta",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 630,
+        "y": 60,
+        "wires": [
+            [
+                "cc36c277fb37a4df"
+            ]
+        ]
+    },
+    {
+        "id": "cc36c277fb37a4df",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "validación de alerta",
+        "func": "// Asegúrate de que msg.payload sea un OBJETO (no un string)\nmsg.payload = {\n    id_paquete: msg.alert.id_paquete,\n    timestamp: msg.alert.timestamp,\n    detected_at: msg.alert.detected_at,\n    reason: msg.alert.reason,\n    temperatura: msg.alert.temperatura,\n    fuerza_g: msg.alert.fuerza_g,\n    inclinacion: msg.alert.inclinacion\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 770,
+        "y": 160,
+        "wires": [
+            [
+                "80d93f3ef46b073d",
+                "5fd818bcfcc68129"
+            ]
+        ]
+    },
+    {
+        "id": "80d93f3ef46b073d",
+        "type": "http request",
+        "z": "f6f2187d.f17ca8",
+        "name": "Alert Request",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://host.docker.internal:8000/alert",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 920,
+        "y": 260,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5fd818bcfcc68129",
+        "type": "debug",
+        "z": "f6f2187d.f17ca8",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 920,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "3e8ff8d4d8241cd2",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Public",
+        "broker": "test.mosquitto.org",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    }
+]
